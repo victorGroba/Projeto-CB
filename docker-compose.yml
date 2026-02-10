@@ -11,4 +11,4 @@ services:
     volumes:
       - ./credentials.json:/app/credentials.json
     ports:
-      - "5020:5000"
+      - "5025:5000"

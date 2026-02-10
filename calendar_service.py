@@ -4,12 +4,12 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import pytz
 
-# Configurações
+# --- Configurações ---
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 SERVICE_ACCOUNT_FILE = 'credentials.json'
-# Se a agenda não for a principal da conta de serviço, coloque o email dela aqui
-# Caso contrário, deixe 'primary'
+# Ajuste o email se necessário
 CALENDAR_ID = 'victorgroba2@gmail.com' 
+TZ_SP = pytz.timezone('America/Sao_Paulo')
 
 def get_calendar_service():
     creds = service_account.Credentials.from_service_account_file(
@@ -17,48 +17,54 @@ def get_calendar_service():
     return build('calendar', 'v3', credentials=creds)
 
 def buscar_eventos_do_dia(data_str):
-    """
-    data_str: string no formato 'YYYY-MM-DD'
-    Retorna uma string descrevendo os horários ocupados.
-    """
+    """Retorna texto com horários ocupados de um dia específico (YYYY-MM-DD)."""
     try:
         service = get_calendar_service()
-        tz = pytz.timezone('America/Sao_Paulo')
-        
-        # Converte a string YYYY-MM-DD para datetime
-        data_base = datetime.datetime.strptime(data_str, "%Y-%m-%d")
-        
-        # Define inicio e fim do dia no fuso horário correto
-        inicio_dia = data_base.replace(hour=0, minute=0, second=0).astimezone(tz)
-        fim_dia = data_base.replace(hour=23, minute=59, second=59).astimezone(tz)
-        
-        # Formata para ISO exigido pelo Google (ex: 2023-10-01T00:00:00-03:00)
-        time_min = inicio_dia.isoformat()
-        time_max = fim_dia.isoformat()
 
-        print(f"Buscando eventos de {time_min} até {time_max}...") # Log para debug
+        # Define horário inicial e final do dia
+        data_base = datetime.datetime.strptime(data_str, "%Y-%m-%d")
+        inicio_dia = data_base.replace(hour=0, minute=0, second=0).astimezone(TZ_SP)
+        fim_dia = data_base.replace(hour=23, minute=59, second=59).astimezone(TZ_SP)
 
         events_result = service.events().list(
             calendarId=CALENDAR_ID, 
-            timeMin=time_min,
-            timeMax=time_max,
+            timeMin=inicio_dia.isoformat(),
+            timeMax=fim_dia.isoformat(),
             singleEvents=True,
             orderBy='startTime'
         ).execute()
-        
+
         events = events_result.get('items', [])
 
         if not events:
-            return "A agenda está totalmente livre neste dia."
+            return "Livre (Dia todo)"
 
-        resultado = "Horários OCUPADOS neste dia:\n"
+        ocupados = []
         for event in events:
             start = event['start'].get('dateTime', event['start'].get('date'))
             # Pega só a hora HH:MM
             hora = start.split('T')[1][:5] if 'T' in start else "Dia todo"
-            resultado += f"- {hora} (Ocupado)\n"
-            
-        return resultado
+            ocupados.append(hora)
+
+        return f"Ocupado às: {', '.join(ocupados)}"
 
     except Exception as e:
-        return f"Erro ao acessar agenda: {str(e)}"
+        return f"Erro na agenda: {str(e)}"
+
+def listar_proximos_dias(qtd_dias=3):
+    """Gera um resumo rápido para a IA entender a disponibilidade futura."""
+    hoje = datetime.datetime.now(TZ_SP)
+    resumo = []
+
+    for i in range(qtd_dias):
+        data_alvo = hoje + datetime.timedelta(days=i)
+        data_str = data_alvo.strftime("%Y-%m-%d")
+        # Tradução manual simples dos dias
+        dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+        dia_semana = dias_semana[data_alvo.weekday()]
+        data_fmt = data_alvo.strftime("%d/%m")
+
+        status = buscar_eventos_do_dia(data_str)
+        resumo.append(f"- {dia_semana} ({data_fmt}): {status}")
+
+    return "\n".join(resumo)

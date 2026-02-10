@@ -3,79 +3,96 @@ import logging
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from calendar_service import listar_proximos_dias
 
-# Configuração de Logs
+# --- Configuração de Logs (Crucial para ver os erros) ---
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
+CORS(app) # Permite que o Typebot e outros sites acessem
 
-# Habilita CORS para permitir requisições do seu Front-end (Next.js/React)
-CORS(app)
-
-# Pega a chave da API (tenta pegar do sistema, se não achar, usa a que você passou)
+# --- Configurações ---
 API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Defina aqui a personalidade do Bot
-SYSTEM_PROMPT = "Você é uma secretária eficiente de um consultório. Responda de forma curta e educada."
+def consultar_gemini(user_message):
+    """
+    Função que conversa com a IA, injetando o contexto da agenda.
+    """
+    # 1. Busca a agenda para dar contexto à IA (lê os próximos 3 dias)
+    try:
+        agenda_info = listar_proximos_dias(3)
+    except Exception as e:
+        logging.error(f"Erro ao ler agenda: {e}")
+        agenda_info = "Erro ao ler agenda. O sistema está parcialmente indisponível."
 
-def chamar_gemini_bruto(user_message):
-    # URL da API do Gemini 1.5 Flash (Rápido e barato)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+    # 2. Monta o Prompt de Sistema (A personalidade da Clara)
+    system_prompt = f"""
+    Você é a Clara, secretária virtual do Dr. Victor.
+    
+    --- STATUS DA AGENDA (LEITURA APENAS) ---
+    {agenda_info}
+    -----------------------------------------
+    
+    INSTRUÇÕES:
+    1. Se o paciente perguntar sobre horários, consulte a lista acima.
+    2. Ofereça SOMENTE os horários que NÃO estão marcados como 'Ocupado'.
+    3. Se o dia estiver "Livre (Dia todo)", sugira horários comerciais (08:00 as 18:00).
+    4. Seja curta, educada e direta.
+    5. Se o paciente confirmar um horário, peça o Nome Completo dele para agendar.
+    """
 
-    headers = {
-        "Content-Type": "application/json"
-    }
-
-    # Monta o prompt combinando a instrução do sistema + mensagem do usuário
-    full_prompt = f"{SYSTEM_PROMPT}\n\nUsuário: {user_message}"
-
+    # URL da API do Google Gemini 1.5 Flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={API_KEY}"
+    
     payload = {
         "contents": [{
-            "parts": [{"text": full_prompt}]
+            "parts": [{"text": f"{system_prompt}\n\nPaciente: {user_message}"}]
         }]
     }
-
+    
     try:
-        # Faz o POST direto
-        response = requests.post(url, headers=headers, json=payload)
+        # Faz a requisição para o Google
+        response = requests.post(url, json=payload)
         
+        # --- VERIFICAÇÃO DE SUCESSO OU ERRO ---
         if response.status_code == 200:
-            dados = response.json()
-            # Extrai o texto com segurança
-            if 'candidates' in dados and len(dados['candidates']) > 0:
-                texto = dados['candidates'][0]['content']['parts'][0]['text']
-                return texto
-            else:
-                return "O modelo não retornou uma resposta válida (conteúdo vazio)."
+            # Sucesso! Extrai o texto da resposta
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            logging.error(f"Erro Google: {response.text}")
-            return f"Erro na API do Google: {response.status_code}"
+            # ERRO! Imprime o detalhe no terminal para você ver
+            logging.error(f"ERRO GOOGLE (Status {response.status_code}):")
+            logging.error(f"DETALHE DO ERRO: {response.text}")
+            return "Desculpe, estou verificando a agenda, pode repetir?"
             
     except Exception as e:
-        logging.error(f"Erro de conexão: {str(e)}")
-        return "Erro interno ao conectar com a IA."
+        logging.error(f"Erro de conexão com a inteligência: {e}")
+        return "Erro interno de conexão com a inteligência."
 
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
         data = request.json
-        # Garante que não quebre se vier sem mensagem
-        user_message = data.get('message', '')
-
+        # Tenta pegar a mensagem de várias formas para garantir compatibilidade
+        user_message = data.get('message') or data.get('text')
+        
         if not user_message:
-            return jsonify({"error": "Mensagem vazia"}), 400
+            logging.warning("Recebi uma requisição vazia do Typebot.")
+            return jsonify({"response": "Olá! Como posso ajudar?"}), 200
 
         logging.info(f"Recebido: {user_message}")
 
-        # Chama a função que fala com o Google
-        resposta = chamar_gemini_bruto(user_message)
+        # Chama a função que fala com o Gemini
+        resposta_ia = consultar_gemini(user_message)
 
-        return jsonify({"response": resposta})
+        # Retorna para o Typebot
+        return jsonify({
+            "response": resposta_ia
+        })
 
     except Exception as e:
-        logging.error(f"ERRO CRÍTICO: {e}")
+        logging.error(f"ERRO CRÍTICO NO SERVIDOR: {e}")
         return jsonify({"error": "Erro interno do servidor", "details": str(e)}), 500
 
 if __name__ == '__main__':
-    # Rodando em todas as interfaces na porta 5000
+    # Roda o servidor (Gunicorn vai substituir isso em produção, mas ok deixar aqui)
     app.run(host='0.0.0.0', port=5000)
