@@ -1,0 +1,5 @@
+*.json
+*.json
+sustained-racer-422211-e6-ed27bde05f3c.json
+.env
+__pycache__/

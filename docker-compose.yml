@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  bot-medico:
+    build: .
+    container_name: bot_medico
+    restart: always
+    environment:
+      - GEMINI_API_KEY=AIzaSyCPgU5ImrlF7WgsGEXCzDV4W3a3gk_QXBk
+      - TZ=America/Sao_Paulo
+    volumes:
+      - ./credentials.json:/app/credentials.json
+    ports:
+      - "5020:5000"
