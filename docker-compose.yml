@@ -20,7 +20,7 @@ services:
 
   # API do WhatsApp (Evolution)
   evolution_api:
-    image: attias/evolution-api:v2.1.1
+    image: atendai/evolution-api:v2.1.1
     container_name: evolution_api
     restart: always
     ports:
