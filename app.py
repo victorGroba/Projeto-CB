@@ -2,9 +2,9 @@ import os
 import logging
 import requests
 import json
+import threading
 import google.generativeai as genai
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 from database import get_db_connection, init_db
 from tools import tools_config, ferramenta_ver_agenda, agendar_consulta
 
@@ -12,15 +12,14 @@ from tools import tools_config, ferramenta_ver_agenda, agendar_consulta
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
-CORS(app)
 
 # Credenciais (Vêm do Docker environment)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-EVOLUTION_URL = os.getenv("EVOLUTION_URL")  # Ex: http://evolution_api:8080
+EVOLUTION_URL = os.getenv("EVOLUTION_URL")
 EVOLUTION_APIKEY = os.getenv("EVOLUTION_APIKEY")
-INSTANCE_NAME = os.getenv("INSTANCE_NAME", "ZapBot")
+INSTANCE_NAME = os.getenv("INSTANCE_NAME", "BotMedico")
 
-# Configura o Gemini com as ferramentas
+# Configura o Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
 # --- Funções de Banco de Dados ---
@@ -79,9 +78,10 @@ def enviar_whatsapp(remote_jid, texto):
     }
     
     try:
+        logging.info(f"📤 Enviando resposta para: {remote_jid}")
         response = requests.post(url, json=payload, headers=headers)
         if response.status_code == 200 or response.status_code == 201:
-            logging.info(f"✅ Mensagem enviada para {remote_jid}")
+            logging.info(f"✅ Mensagem enviada com sucesso para {remote_jid}")
         else:
             logging.error(f"❌ Erro ao enviar para {remote_jid}: {response.status_code} - {response.text}")
     except Exception as e:
@@ -91,12 +91,13 @@ def enviar_whatsapp(remote_jid, texto):
 
 def processar_ia(remote_jid, mensagem_usuario):
     """Processa a mensagem do usuário com o Gemini"""
+    logging.info(f"🧠 Iniciando processamento IA para {remote_jid}")
     try:
         # 1. Recupera histórico
         historico = buscar_historico(remote_jid)
         
-        # 2. Adiciona a mensagem atual
-        historico.append({"role": "user", "parts": [mensagem_usuario]})
+        # 2. Adiciona a mensagem atual (apenas localmente para o prompt, pois já salvamos no webhook)
+        # OBS: Se você quiser salvar aqui, descomente a linha de salvar_mensagem no final
         
         # 3. Configura o Modelo e o System Prompt
         system_instruction = """
@@ -110,33 +111,25 @@ REGRAS IMPORTANTES:
 4. Seja extremamente educada, profissional e empática.
 5. Se não tiver certeza de algo, pergunte ao paciente.
 6. Confirme todas as informações antes de agendar.
+7. Responda de forma curta e natural, como no WhatsApp.
 
 HORÁRIO DE FUNCIONAMENTO:
 - Segunda a Sexta: 8h às 18h
 - Consultas de 1 hora
-
-EXEMPLO DE CONVERSA:
-Paciente: "Oi, queria marcar uma consulta"
-Clara: "Olá! Fico feliz em ajudar. Qual data você prefere para a consulta?"
-Paciente: "Amanhã tem?"
-Clara: [USA ver_agenda('amanha')] "Deixe me verificar... Amanhã temos os seguintes horários disponíveis: 9h, 14h e 16h. Qual prefere?"
-Paciente: "14h tá bom"
-Clara: "Perfeito! Para confirmar, preciso de seu nome completo, telefone e data de nascimento."
 """
         
         model = genai.GenerativeModel(
-            model_name='gemini-2.0-flash-exp',
+            model_name='gemini-2.5-flash',
             tools=tools_config,
             system_instruction=system_instruction
         )
 
-        chat = model.start_chat(history=historico[:-1])
+        chat = model.start_chat(history=historico)
 
         # Envia a mensagem do usuário para o Gemini
         response = chat.send_message(mensagem_usuario)
         
         # --- Lógica de Function Calling ---
-        # Loop para lidar com múltiplas chamadas de função
         max_iterations = 5
         iteration = 0
         
@@ -144,14 +137,16 @@ Clara: "Perfeito! Para confirmar, preciso de seu nome completo, telefone e data 
             iteration += 1
             
             # Verifica se há chamada de função
-            if not response.candidates[0].content.parts:
+            if not response.candidates or not response.candidates[0].content.parts:
                 break
                 
             first_part = response.candidates[0].content.parts[0]
             
+            # Se não for chamada de função, é texto final. Sai do loop.
             if not hasattr(first_part, 'function_call'):
                 break
             
+            # Executa a ferramenta
             fn = first_part.function_call
             logging.info(f"🔧 Gemini chamou a ferramenta: {fn.name}")
             
@@ -188,18 +183,22 @@ Clara: "Perfeito! Para confirmar, preciso de seu nome completo, telefone e data 
                 break
 
         # Texto final da resposta
-        resposta_texto = response.text
-        
-        # Salva no banco e envia
-        salvar_mensagem(remote_jid, "user", mensagem_usuario)
-        salvar_mensagem(remote_jid, "model", resposta_texto)
-        enviar_whatsapp(remote_jid, resposta_texto)
-        
-        logging.info(f"✅ Processamento concluído para {remote_jid}")
+        if response.text:
+            resposta_texto = response.text
+            
+            # Salva no banco e envia
+            salvar_mensagem(remote_jid, "user", mensagem_usuario)
+            salvar_mensagem(remote_jid, "model", resposta_texto)
+            enviar_whatsapp(remote_jid, resposta_texto)
+            
+            logging.info(f"✅ Ciclo concluído para {remote_jid}")
+        else:
+            logging.warning("⚠️ Gemini não retornou texto final.")
 
     except Exception as e:
         logging.error(f"❌ Erro no processamento da IA: {e}", exc_info=True)
-        enviar_whatsapp(remote_jid, "Desculpe, tive um erro técnico momentâneo. Pode repetir?")
+        # Opcional: Enviar mensagem de erro para o usuário
+        # enviar_whatsapp(remote_jid, "Desculpe, tive um erro técnico momentâneo.")
 
 # --- Rotas ---
 
@@ -208,7 +207,7 @@ def webhook():
     """Recebe mensagens do WhatsApp via Evolution API"""
     try:
         data = request.json
-        logging.info(f"📥 Webhook recebido: {json.dumps(data, indent=2)}")
+        # logging.info(f"📥 Webhook recebido: {json.dumps(data, indent=2)}") # Descomente para debug total
         
         # Verifica se é uma mensagem nova
         if data.get('event') == 'messages.upsert':
@@ -217,35 +216,45 @@ def webhook():
             remote_jid = key.get('remoteJid')
             from_me = key.get('fromMe', False)
             
+            # CORREÇÃO PRINCIPAL: Pega o sender (número real) em vez do remoteJid (que pode ser LID)
+            sender_jid = data.get('sender')
+            
             # Ignora mensagens enviadas pelo próprio bot
-            if from_me:
-                logging.info(f"⏭️  Ignorando mensagem própria")
-                return jsonify({"status": "ignored_own_message"}), 200
+           # if from_me:
+           #     logging.info(f"⏭️  Ignorando mensagem própria")
+            #    return jsonify({"status": "ignored_own_message"}), 200
             
-            # Ignora mensagens de grupos
+            # Lógica para definir quem recebe a resposta
+            target_jid = remote_jid
+            
+            # Se for grupo, mantém o remoteJid (ID do grupo). Se for privado, usa o sender.
             if remote_jid and '@g.us' in remote_jid:
-                logging.info(f"⏭️  Ignorando mensagem de grupo")
+                logging.info(f"⏭️  Ignorando mensagem de grupo: {remote_jid}")
                 return jsonify({"status": "ignored_group"}), 200
+            else:
+                # Se for conversa privada, usa o sender para garantir que não é LID
+                if sender_jid:
+                    target_jid = sender_jid
             
-            if remote_jid:
+            if target_jid:
                 # Extrai o texto da mensagem
                 message_content = msg_data.get('message', {})
-                
-                # Tenta várias formas de extrair texto
                 texto = None
+                
                 if 'conversation' in message_content:
                     texto = message_content['conversation']
                 elif 'extendedTextMessage' in message_content:
                     texto = message_content['extendedTextMessage'].get('text')
-                elif 'imageMessage' in message_content:
-                    texto = message_content['imageMessage'].get('caption', '[Imagem recebida]')
                 
                 if texto and texto.strip():
-                    logging.info(f"💬 Mensagem de {remote_jid}: {texto}")
-                    # Processa em background (em produção, use Celery ou similar)
-                    processar_ia(remote_jid, texto)
+                    logging.info(f"💬 Mensagem de {target_jid}: {texto}")
+                    
+                    # CORREÇÃO 2: Executa em Thread separada para não travar o webhook
+                    thread = threading.Thread(target=processar_ia, args=(target_jid, texto))
+                    thread.start()
+                    
                 else:
-                    logging.warning(f"⚠️  Mensagem sem texto de {remote_jid}")
+                    logging.warning(f"⚠️  Mensagem sem texto de {target_jid}")
         
         return jsonify({"status": "recebido"}), 200
         
@@ -262,22 +271,14 @@ def health():
         "instance_name": INSTANCE_NAME
     }), 200
 
-@app.route('/test-send', methods=['POST'])
-def test_send():
-    """Endpoint de teste para enviar mensagens"""
-    data = request.json
-    numero = data.get('numero')
-    texto = data.get('texto', 'Mensagem de teste do bot!')
-    
-    if not numero:
-        return jsonify({"error": "número é obrigatório"}), 400
-    
-    enviar_whatsapp(numero, texto)
-    return jsonify({"status": "enviado"}), 200
-
 # Inicializa o banco ao ligar
 with app.app_context():
-    init_db()
+    try:
+        init_db()
+        logging.info("📦 Banco de dados inicializado.")
+    except Exception as e:
+        logging.error(f"❌ Erro ao iniciar banco: {e}")
 
 if __name__ == '__main__':
+    # Em produção, use Gunicorn. Para desenvolvimento:
     app.run(host='0.0.0.0', port=5000, debug=True)

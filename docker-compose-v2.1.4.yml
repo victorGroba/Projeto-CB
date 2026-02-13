@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  bot-medico:
+    build: .
+    container_name: bot_medico
+    restart: always
+    ports:
+      - "5025:5000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATABASE_URL=postgresql://user:password@db:5432/medico_db
+      - TZ=America/Sao_Paulo
+      - EVOLUTION_URL=http://evolution_api:8080
+      - EVOLUTION_APIKEY=${AUTHENTICATION_API_KEY}
+      - INSTANCE_NAME=BotMedico
+    volumes:
+      - ./credentials.json:/app/credentials.json
+    depends_on:
+      - db
+      - evolution_api
+
+  evolution_api:
+    image: atendai/evolution-api:v2.1.4  # ← VERSÃO 2.1.4 (mais estável)
+    container_name: evolution_api
+    restart: always
+    shm_size: '2gb'
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_URL=http://78.142.242.82:8080
+      - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
+      - LOG_LEVEL=DEBUG
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db?schema=evolution
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://redis:6379/0
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_REDIS_SAVE_INSTANCES=true
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - QRCODE_LIMIT=30
+      - DEL_TEMP_INSTANCES=true
+      - "CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --disable-gpu"
+    volumes:
+      - evolution_store:/evolution/store
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: medico_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  evolution_store:
+  redis_data:
