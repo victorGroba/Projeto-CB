@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Seu Cérebro Python
+  # Seu Cérebro Python (Bot)
   bot-medico:
     build: .
     container_name: bot_medico
@@ -10,10 +10,14 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=postgresql://user:password@db:5432/medico_db
       - TZ=America/Sao_Paulo
+      # Configuração para falar com a Evolution
+      - EVOLUTION_URL=http://evolution_api:8080
+      - EVOLUTION_APIKEY=${AUTHENTICATION_API_KEY}
+      - INSTANCE_NAME=MyInstance
     volumes:
       - ./credentials.json:/app/credentials.json
     ports:
-      - "5000:5000"
+      - "5025:5000"
     depends_on:
       - db
       - evolution_api
@@ -26,12 +30,13 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - AUTHENTICATION_API_KEY=sua_senha_segura_aqui
+      - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
+      - DATABASE_PROVIDER=local     # <--- CORREÇÃO CRÍTICA (Resolve o loop)
       - DATABASE_ENABLED=false
     volumes:
       - evolution_store:/evolution/store
 
-  # Banco de Dados
+  # Banco de Dados (Postgres)
   db:
     image: postgres:15
     container_name: postgres_db
