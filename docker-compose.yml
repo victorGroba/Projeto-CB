@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # Seu Cérebro Python (Bot)
   bot-medico:
     build: .
     container_name: bot_medico
@@ -21,66 +20,36 @@ services:
       - db
       - evolution_api
 
-  # API do WhatsApp (Evolution)
   evolution_api:
     image: atendai/evolution-api:latest
     container_name: evolution_api
     restart: always
-    # Aumenta a memória compartilhada (Essencial)
     shm_size: '2gb'
     ports:
       - "8080:8080"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
-      - SERVER_URL=http://localhost:8080
+      - SERVER_URL=http://evolution_api:8080
       - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
-      # --- Logs Detalhados (Para vermos o erro se der ruim) ---
       - LOG_LEVEL=DEBUG
-      # --- Banco de Dados ---
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db?schema=evolution
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
-      # --- Cache (Redis) ---
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379/0
       - CACHE_REDIS_PREFIX_KEY=evolution
       - CACHE_REDIS_SAVE_INSTANCES=true
-      # --- Args "Nucleares" (Força o Chrome a rodar em VPS) ---
-      - "CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --no-zygote --disable-gpu"
+      # Argumentos otimizados para VPS
+      - "CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --disable-gpu --single-process"
     volumes:
       - evolution_store:/evolution/store
     depends_on:
       - db
       - redis
-# API do WhatsApp (Evolution)
-  evolution_api:
-    image: atendai/evolution-api:v2.1.1
-    container_name: evolution_api
-    restart: always
-    shm_size: '2gb'
-    ports:
-      - "8080:8080"
-    environment:
-      - SERVER_URL=http://localhost:8080
-      - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
-      - LOG_LEVEL=DEBUG
-      # --- Banco de Dados ---
-      - DATABASE_ENABLED=true
-      - DATABASE_PROVIDER=postgresql
-      - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db?schema=evolution
-      - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
-      # --- Cache (Redis) ---
-      - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_URI=redis://redis:6379/0
-      - CACHE_REDIS_PREFIX_KEY=evolution
-      - CACHE_REDIS_SAVE_INSTANCES=true
-      # --- Args Corrigidos (Removido o que estava travando) ---
-      - "CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --disable-gpu"
-    volumes:
-      - evolution_store:/evolution/store
-    depends_on:
-      - db
-      - redis  # Banco de Dados (Postgres)
+
   db:
     image: postgres:15
     container_name: postgres_db
@@ -92,7 +61,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  # Cache (Redis)
   redis:
     image: redis:alpine
     container_name: redis
