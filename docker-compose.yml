@@ -5,6 +5,8 @@ services:
     build: .
     container_name: bot_medico
     restart: always
+    ports:
+      - "5025:5000"
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=postgresql://user:password@db:5432/medico_db
@@ -14,62 +16,119 @@ services:
       - INSTANCE_NAME=ZapBot
     volumes:
       - ./credentials.json:/app/credentials.json
-    ports:
-      - "5025:5000"
+      - ./app.py:/app/app.py
+      - ./tools.py:/app/tools.py
+      - ./database.py:/app/database.py
     depends_on:
-      - db
-      - evolution_api
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      evolution_api:
+        condition: service_started
+    networks:
+      - bot_network
 
   evolution_api:
-    image: atendai/evolution-api:latest
+    image: atendai/evolution-api:v2.0.9
     container_name: evolution_api
     restart: always
     shm_size: '2gb'
     ports:
       - "8080:8080"
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     environment:
-      - SERVER_URL=http://evolution_api:8080
+      - SERVER_URL=http://78.142.242.82:8080
       - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
       - LOG_LEVEL=DEBUG
+      - LOG_COLOR=true
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db?schema=evolution
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379/0
       - CACHE_REDIS_PREFIX_KEY=evolution
       - CACHE_REDIS_SAVE_INSTANCES=true
-      # Argumentos otimizados para VPS
-      - "CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --disable-gpu --single-process"
+      - QRCODE_LIMIT=60
+      - QRCODE_COLOR=#198754
+      - WEBHOOK_GLOBAL_ENABLED=false
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - DEL_INSTANCE=false
+      - DEL_TEMP_INSTANCES=true
+      - CLEAN_STORE_CLEANING_INTERVAL=7200
+      - CLEAN_STORE_MESSAGES=true
+      - CLEAN_STORE_MESSAGE_UP_TO_DAYS=30
+      - CLEAN_STORE_CONTACTS=true
+      - CLEAN_STORE_CHATS=true
+      - CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --disable-gpu --disable-software-rasterizer --disable-dev-tools --disable-extensions
     volumes:
       - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - bot_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   db:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: postgres_db
     restart: always
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: medico_db
+      POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bot_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d medico_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: redis
     restart: always
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
+    networks:
+      - bot_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  bot_network:
+    driver: bridge
 
 volumes:
   postgres_data:
+    driver: local
   evolution_store:
+    driver: local
+  evolution_instances:
+    driver: local
   redis_data:
+    driver: local
