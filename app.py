@@ -63,6 +63,58 @@ def buscar_historico(telefone, limite=10):
         logging.error(f"Erro ao buscar histórico: {e}")
         return []
 
+# --- Funções de Descoberta de Número Real ---
+
+def descobrir_numero_real_lid(lid_jid, push_name, sender_field):
+    """
+    Tenta descobrir o número real a partir de um @lid
+    Usa múltiplas estratégias para encontrar o número
+    """
+    try:
+        # Extrai apenas o número do @lid
+        lid_number = lid_jid.split('@')[0]
+        
+        logging.info(f"🔍 Tentando descobrir número real para @lid: {lid_number}")
+        
+        # ESTRATÉGIA 1: Verificar se o número @lid é válido como @s.whatsapp.net
+        url = f"{EVOLUTION_URL}/chat/whatsappNumbers/{INSTANCE_NAME}"
+        headers = {
+            "apikey": EVOLUTION_APIKEY,
+            "Content-Type": "application/json"
+        }
+        payload = {"numbers": [lid_number]}
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0:
+                result = data[0]
+                if result.get('exists'):
+                    numero_real = result.get('jid')
+                    logging.info(f"✅ Número real descoberto via API: {numero_real}")
+                    return numero_real
+                else:
+                    logging.warning(f"⚠️ API diz que número {lid_number} não existe")
+        
+        # ESTRATÉGIA 2: Usar o sender se disponível (número de quem enviou)
+        # Mas CUIDADO: sender pode ser o dono do bot, não o contato!
+        if sender_field and '@s.whatsapp.net' in sender_field:
+            # Extrai só o número do sender
+            sender_number = sender_field.split('@')[0]
+            # Valida se é diferente do dono do bot (evita loop)
+            if sender_number != lid_number:
+                logging.info(f"⚠️ Tentando usar sender como alternativa: {sender_field}")
+                return sender_field
+        
+        # ESTRATÉGIA 3: Se nada funcionar, retorna None
+        logging.error(f"❌ Não foi possível descobrir número real para @lid: {lid_number}")
+        return None
+        
+    except Exception as e:
+        logging.error(f"❌ Erro ao descobrir número real: {e}")
+        return None
+
 # --- Funções de Envio (Evolution API) ---
 
 def enviar_whatsapp(remote_jid, texto):
@@ -72,34 +124,42 @@ def enviar_whatsapp(remote_jid, texto):
         "apikey": EVOLUTION_APIKEY,
         "Content-Type": "application/json"
     }
+    
+    # Garante que o número está no formato correto
+    numero_envio = remote_jid
+    
     payload = {
-        "number": remote_jid,
+        "number": numero_envio,
         "text": texto
     }
     
     try:
-        logging.info(f"📤 Enviando resposta para: {remote_jid}")
+        logging.info(f"📤 Enviando resposta para: {numero_envio}")
+        logging.info(f"🔍 Payload: {payload}")
         response = requests.post(url, json=payload, headers=headers)
         if response.status_code == 200 or response.status_code == 201:
-            logging.info(f"✅ Mensagem enviada com sucesso para {remote_jid}")
+            logging.info(f"✅ Mensagem enviada com sucesso para {numero_envio}")
         else:
-            logging.error(f"❌ Erro ao enviar para {remote_jid}: {response.status_code} - {response.text}")
+            logging.error(f"❌ Erro ao enviar para {numero_envio}: {response.status_code} - {response.text}")
     except Exception as e:
         logging.error(f"❌ Exceção ao enviar para Evolution: {e}")
 
 # --- Cérebro da IA (Gemini + Tools) ---
 
-def processar_ia(remote_jid, mensagem_usuario):
-    """Processa a mensagem do usuário com o Gemini"""
-    logging.info(f"🧠 Iniciando processamento IA para {remote_jid}")
+def processar_ia(numero_para_envio, numero_limpo, mensagem_usuario):
+    """Processa a mensagem do usuário com o Gemini
+    
+    Args:
+        numero_para_envio: Número completo com @lid ou @s.whatsapp.net para enviar resposta
+        numero_limpo: Número limpo para salvar no banco de dados
+        mensagem_usuario: Texto da mensagem
+    """
+    logging.info(f"🧠 Iniciando processamento IA para {numero_limpo}")
     try:
-        # 1. Recupera histórico
-        historico = buscar_historico(remote_jid)
+        # 1. Recupera histórico usando o número limpo
+        historico = buscar_historico(numero_limpo)
         
-        # 2. Adiciona a mensagem atual (apenas localmente para o prompt, pois já salvamos no webhook)
-        # OBS: Se você quiser salvar aqui, descomente a linha de salvar_mensagem no final
-        
-        # 3. Configura o Modelo e o System Prompt
+        # 2. Configura o Modelo e o System Prompt
         system_instruction = """
 Você é a Clara, secretária virtual do Dr. Victor.
 Sua função é agendar consultas e tirar dúvidas sobre a clínica.
@@ -186,19 +246,19 @@ HORÁRIO DE FUNCIONAMENTO:
         if response.text:
             resposta_texto = response.text
             
-            # Salva no banco e envia
-            salvar_mensagem(remote_jid, "user", mensagem_usuario)
-            salvar_mensagem(remote_jid, "model", resposta_texto)
-            enviar_whatsapp(remote_jid, resposta_texto)
+            # Salva no banco usando número limpo
+            salvar_mensagem(numero_limpo, "user", mensagem_usuario)
+            salvar_mensagem(numero_limpo, "model", resposta_texto)
             
-            logging.info(f"✅ Ciclo concluído para {remote_jid}")
+            # Envia usando número completo com @lid ou @s.whatsapp.net
+            enviar_whatsapp(numero_para_envio, resposta_texto)
+            
+            logging.info(f"✅ Ciclo concluído para {numero_limpo}")
         else:
             logging.warning("⚠️ Gemini não retornou texto final.")
 
     except Exception as e:
         logging.error(f"❌ Erro no processamento da IA: {e}", exc_info=True)
-        # Opcional: Enviar mensagem de erro para o usuário
-        # enviar_whatsapp(remote_jid, "Desculpe, tive um erro técnico momentâneo.")
 
 # --- Rotas ---
 
@@ -207,7 +267,7 @@ def webhook():
     """Recebe mensagens do WhatsApp via Evolution API"""
     try:
         data = request.json
-        # logging.info(f"📥 Webhook recebido: {json.dumps(data, indent=2)}") # Descomente para debug total
+        logging.info(f"📥 Webhook recebido: {json.dumps(data, indent=2)[:500]}...")
         
         # Verifica se é uma mensagem nova
         if data.get('event') == 'messages.upsert':
@@ -216,27 +276,48 @@ def webhook():
             remote_jid = key.get('remoteJid')
             from_me = key.get('fromMe', False)
             
-            # CORREÇÃO PRINCIPAL: Pega o sender (número real) em vez do remoteJid (que pode ser LID)
-            sender_jid = data.get('sender')
+            # 🔥 CORREÇÃO 1: Ignora mensagens enviadas pelo próprio bot
+            if from_me:
+                logging.info(f"⏭️ Ignorando mensagem própria (from_me=True)")
+                return jsonify({"status": "ignored_own_message"}), 200
             
-            # Ignora mensagens enviadas pelo próprio bot
-           # if from_me:
-           #     logging.info(f"⏭️  Ignorando mensagem própria")
-            #    return jsonify({"status": "ignored_own_message"}), 200
-            
-            # Lógica para definir quem recebe a resposta
-            target_jid = remote_jid
-            
-            # Se for grupo, mantém o remoteJid (ID do grupo). Se for privado, usa o sender.
+            # 🔥 CORREÇÃO 2: Ignora mensagens de grupos
             if remote_jid and '@g.us' in remote_jid:
-                logging.info(f"⏭️  Ignorando mensagem de grupo: {remote_jid}")
+                logging.info(f"⏭️ Ignorando mensagem de grupo: {remote_jid}")
                 return jsonify({"status": "ignored_group"}), 200
-            else:
-                # Se for conversa privada, usa o sender para garantir que não é LID
-                if sender_jid:
-                    target_jid = sender_jid
             
-            if target_jid:
+            # 🔥 CORREÇÃO 3: Descobrir número real automaticamente quando for @lid
+            target_jid = remote_jid
+            sender_field = data.get('sender')
+            push_name = msg_data.get('pushName', '')
+            
+            logging.info(f"🔍 DEBUG - remoteJid: {remote_jid}")
+            logging.info(f"🔍 DEBUG - sender field: {sender_field}")
+            logging.info(f"🔍 DEBUG - pushName: {push_name}")
+            
+            # Se for @lid, tenta descobrir o número real AUTOMATICAMENTE
+            if '@lid' in target_jid:
+                logging.info(f"⚠️ Detectado @lid - tentando descobrir número real...")
+                numero_real = descobrir_numero_real_lid(target_jid, push_name, sender_field)
+                
+                if numero_real:
+                    target_jid = numero_real
+                    logging.info(f"✅ Usando número descoberto: {target_jid}")
+                else:
+                    logging.error(f"❌ Não foi possível descobrir número real para @lid - ignorando mensagem")
+                    # Registra para análise posterior
+                    logging.error(f"📊 Dados para debug: remoteJid={remote_jid}, sender={sender_field}, pushName={push_name}")
+                    return jsonify({"status": "cannot_resolve_lid"}), 200
+            
+            logging.info(f"🔍 DEBUG - target_jid final: {target_jid}")
+            
+            numero_para_envio = target_jid
+            numero_limpo = target_jid.split('@')[0] if '@' in target_jid else target_jid
+            
+            logging.info(f"🔍 DEBUG - numero_para_envio: {numero_para_envio}")
+            logging.info(f"🔍 DEBUG - numero_limpo (banco): {numero_limpo}")
+            
+            if numero_para_envio:
                 # Extrai o texto da mensagem
                 message_content = msg_data.get('message', {})
                 texto = None
@@ -247,14 +328,14 @@ def webhook():
                     texto = message_content['extendedTextMessage'].get('text')
                 
                 if texto and texto.strip():
-                    logging.info(f"💬 Mensagem de {target_jid}: {texto}")
+                    logging.info(f"💬 Mensagem de {numero_limpo}: {texto}")
                     
-                    # CORREÇÃO 2: Executa em Thread separada para não travar o webhook
-                    thread = threading.Thread(target=processar_ia, args=(target_jid, texto))
+                    # 🔥 CORREÇÃO 4: Passa ambos os números - um para enviar, outro para salvar
+                    thread = threading.Thread(target=processar_ia, args=(numero_para_envio, numero_limpo, texto))
                     thread.start()
                     
                 else:
-                    logging.warning(f"⚠️  Mensagem sem texto de {target_jid}")
+                    logging.warning(f"⚠️ Mensagem sem texto de {numero_limpo}")
         
         return jsonify({"status": "recebido"}), 200
         
@@ -282,3 +363,4 @@ with app.app_context():
 if __name__ == '__main__':
     # Em produção, use Gunicorn. Para desenvolvimento:
     app.run(host='0.0.0.0', port=5000, debug=True)
+

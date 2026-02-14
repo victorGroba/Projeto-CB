@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # --- SEU BOT (CORRIGIDO) ---
   bot-medico:
     build: .
     container_name: bot_medico
@@ -14,47 +15,77 @@ services:
       - EVOLUTION_URL=http://evolution_api:8080
       - EVOLUTION_APIKEY=${AUTHENTICATION_API_KEY}
       - INSTANCE_NAME=BotMedico
+      - CHATWOOT_URL=http://chatwoot_base:3000
+      - CHATWOOT_ENABLED=true
+      - CHATWOOT_ACCOUNT_ID=1
+      - CHATWOOT_TOKEN=SEU_TOKEN_AQUI
+      - CHATWOOT_URL=http://chatwoot_base:3000
+      - CHATWOOT_SIGN_MSG=true
+      - CHATWOOT_REOPEN_CONVERSATION=true
+      - CHATWOOT_CONVERSATION_PENDING=false
+      - CHATWOOT_IMPORT_CONTACTS=true
+      - CHATWOOT_NAME_INBOX=WhatsApp - Dr. Victor
+      - CHATWOOT_MERGE_BRAZIL_CONTACTS=true
+      - CHATWOOT_IMPORT_MESSAGES=true
+      - CHATWOOT_DAYS_LIMIT_IMPORT_MESSAGES=60
     volumes:
       - ./credentials.json:/app/credentials.json
     depends_on:
       - db
       - evolution_api
+    networks:
+      - bot_network
 
+  # --- EVOLUTION API (OTIMIZADO) ---
   evolution_api:
     image: atendai/evolution-api:v2.2.3
     container_name: evolution_api
     restart: always
-    shm_size: '2gb'
     ports:
       - "8080:8080"
     environment:
+      # Configurações Básicas
       - SERVER_URL=http://78.142.242.82:8080
       - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
-      - LOG_LEVEL=DEBUG
-      # Correção da Versão do WhatsApp (Alpha Stable de Fev/2026)
+      - LOG_LEVEL=ERROR
       - CONFIG_SESSION_PHONE_VERSION=2.3000.1033105955
+      
+      # Banco de Dados
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db?schema=evolution
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
+      
+      # Redis Cache
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379/0
-      - CACHE_REDIS_PREFIX_KEY=evolution
-      - CACHE_REDIS_SAVE_INSTANCES=true
-      - DATABASE_SAVE_DATA_INSTANCE=true
-      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
-      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      
+      # Webhook para o Bot
+      - WEBHOOK_GLOBAL_URL=http://bot-medico:5000/webhook
+      - WEBHOOK_GLOBAL_ENABLED=true
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=true
+      
+      # Chatwoot Integration
+      - CHATWOOT_ENABLED=true
+      - CHATWOOT_MESSAGE_READ=true
+      - CHATWOOT_MESSAGE_DELETE=true
+      - CHATWOOT_IMPORT_DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db
+      - CHATWOOT_IMPORT_PLACEHOLDER_MEDIA_MESSAGE=true
+      
+      # Outras Configurações
       - QRCODE_LIMIT=50
       - DEL_TEMP_INSTANCES=true
-      - "CHROME_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --disable-gpu"
     volumes:
       - evolution_store:/evolution/store
     depends_on:
       - db
       - redis
+    networks:
+      - bot_network
 
+  # --- BANCO DE DADOS (COMPARTILHADO) ---
   db:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: postgres_db
     restart: always
     environment:
@@ -64,6 +95,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+    networks:
+      - bot_network
+
+  # --- REDIS (COMPARTILHADO) ---
   redis:
     image: redis:alpine
     container_name: redis
@@ -71,8 +106,84 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    networks:
+      - bot_network
+
+  # --- CHATWOOT BASE (CORRIGIDO) ---
+  chatwoot_base:
+    image: chatwoot/chatwoot:latest
+    container_name: chatwoot_base
+    restart: always
+    ports:
+      - "3001:3000"
+    environment: &chatwoot_env
+      FRONTEND_URL: http://78.142.242.82:3001
+      DEFAULT_LOCALE: pt_BR
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_NAME: "Clara Bot - Dr. Victor"
+      
+      # Banco de Dados
+      POSTGRES_HOST: db
+      POSTGRES_USERNAME: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DATABASE: chatwoot_production
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/1
+      
+      # Segurança
+      SECRET_KEY_BASE: "sua_chave_secreta_super_longa_e_aleatoria_aqui_12345678901234567890"
+      FORCE_SSL: "false"
+      
+      # Configurações
+      ENABLE_ACCOUNT_SIGNUP: "true"
+      
+      # Storage (Opcional - para produção use S3)
+      ACTIVE_STORAGE_SERVICE: local
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - chatwoot_storage:/app/storage
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    networks:
+      - bot_network
+
+  # --- CHATWOOT SIDEKIQ (Background Jobs) ---
+  chatwoot_sidekiq:
+    image: chatwoot/chatwoot:latest
+    container_name: chatwoot_sidekiq
+    restart: always
+    environment: *chatwoot_env
+    depends_on:
+      - db
+      - redis
+      - chatwoot_base
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    networks:
+      - bot_network
+
+  # --- CHATWOOT WORKER (Cron Jobs) ---
+  chatwoot_worker:
+    image: chatwoot/chatwoot:latest
+    container_name: chatwoot_worker
+    restart: always
+    environment: *chatwoot_env
+    depends_on:
+      - db
+      - redis
+      - chatwoot_base
+    command: ["bundle", "exec", "rails", "runner", "bin/cron_for_production"]
+    networks:
+      - bot_network
+
+networks:
+  bot_network:
+    driver: bridge
 
 volumes:
   postgres_data:
   evolution_store:
   redis_data:
+  chatwoot_storage:
