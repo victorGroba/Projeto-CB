@@ -4,7 +4,7 @@ import json
 # Configurações
 EVOLUTION_URL = "http://78.142.242.82:8080"
 API_KEY = "Josevfg2409@"
-INSTANCE_NAME = "BotMedico"
+INSTANCE_NAME = " BotMedico"
 
 def configurar_webhook():
     """Configura o webhook para a instância do bot"""

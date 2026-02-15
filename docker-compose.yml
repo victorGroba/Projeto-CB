@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # --- SEU BOT (CORRIGIDO) ---
+  # --- BOT MÉDICO (PYTHON) ---
   bot-medico:
     build: .
     container_name: bot_medico
@@ -12,43 +12,44 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=postgresql://user:password@db:5432/medico_db
       - TZ=America/Sao_Paulo
+      # URL interna do Docker para falar com a Evolution
       - EVOLUTION_URL=http://evolution_api:8080
       - EVOLUTION_APIKEY=${AUTHENTICATION_API_KEY}
+      # NOME IMPORTANTE: Tem que ser BotMedico para bater com a instância criada
       - INSTANCE_NAME=BotMedico
-      - CHATWOOT_URL=http://chatwoot_base:3000
-      - CHATWOOT_ENABLED=true
-      - CHATWOOT_ACCOUNT_ID=1
-      - CHATWOOT_TOKEN=SEU_TOKEN_AQUI
-      - CHATWOOT_URL=http://chatwoot_base:3000
-      - CHATWOOT_SIGN_MSG=true
-      - CHATWOOT_REOPEN_CONVERSATION=true
-      - CHATWOOT_CONVERSATION_PENDING=false
-      - CHATWOOT_IMPORT_CONTACTS=true
-      - CHATWOOT_NAME_INBOX=WhatsApp - Dr. Victor
-      - CHATWOOT_MERGE_BRAZIL_CONTACTS=true
-      - CHATWOOT_IMPORT_MESSAGES=true
-      - CHATWOOT_DAYS_LIMIT_IMPORT_MESSAGES=60
     volumes:
       - ./credentials.json:/app/credentials.json
+      - ./app.py:/app/app.py
+      - ./tools.py:/app/tools.py
+      - ./database.py:/app/database.py
     depends_on:
-      - db
-      - evolution_api
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      evolution_api:
+        condition: service_started
     networks:
       - bot_network
 
-  # --- EVOLUTION API (OTIMIZADO) ---
+  # --- EVOLUTION API (COM CHATWOOT ATIVADO) ---
   evolution_api:
-    image: atendai/evolution-api:v2.2.3
+    image: atendai/evolution-api:v2.2.2
     container_name: evolution_api
     restart: always
+    shm_size: '2gb'
     ports:
       - "8080:8080"
     environment:
-      # Configurações Básicas
       - SERVER_URL=http://78.142.242.82:8080
       - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
-      - LOG_LEVEL=ERROR
-      - CONFIG_SESSION_PHONE_VERSION=2.3000.1033105955
+      
+      # --- ATIVAÇÃO DO CHATWOOT (CRUCIAL) ---
+      - CHATWOOT_ENABLED=true
+      - CHATWOOT_MESSAGE_READ=true
+      - CHATWOOT_MESSAGE_DELETE=true
+      - CHATWOOT_IMPORT_CONTACTS=true
+      - CHATWOOT_IMPORT_MESSAGES=true
       
       # Banco de Dados
       - DATABASE_ENABLED=true
@@ -56,34 +57,34 @@ services:
       - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db?schema=evolution
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
       
-      # Redis Cache
+      # Redis
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379/0
+      - CACHE_REDIS_PREFIX_KEY=evolution
       
-      # Webhook para o Bot
-      - WEBHOOK_GLOBAL_URL=http://bot-medico:5000/webhook
+      # Outros
+      - LOG_LEVEL=ERROR
+      - QRCODE_LIMIT=60
       - WEBHOOK_GLOBAL_ENABLED=false
-      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
-      
-      # Chatwoot Integration
-      - CHATWOOT_ENABLED=true
-      - CHATWOOT_MESSAGE_READ=true
-      - CHATWOOT_MESSAGE_DELETE=true
-      - CHATWOOT_IMPORT_DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/medico_db
-      - CHATWOOT_IMPORT_PLACEHOLDER_MEDIA_MESSAGE=true
-      
-      # Outras Configurações
-      - QRCODE_LIMIT=50
-      - DEL_TEMP_INSTANCES=false
+      - DEL_TEMP_INSTANCES=true
     volumes:
       - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - bot_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  # --- BANCO DE DADOS (COMPARTILHADO) ---
+  # --- BANCO DE DADOS ---
   db:
     image: pgvector/pgvector:pg15
     container_name: postgres_db
@@ -92,24 +93,35 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: medico_db
+      POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     networks:
       - bot_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d medico_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
-  # --- REDIS (COMPARTILHADO) ---
+  # --- REDIS ---
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: redis
     restart: always
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     networks:
       - bot_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # --- CHATWOOT BASE (CORRIGIDO) ---
+  # --- CHATWOOT (VOCÊ PRECISAVA DISSO AQUI!) ---
   chatwoot_base:
     image: chatwoot/chatwoot:latest
     container_name: chatwoot_base
@@ -121,58 +133,44 @@ services:
       DEFAULT_LOCALE: pt_BR
       NODE_ENV: production
       RAILS_ENV: production
-      INSTALLATION_NAME: "Clara Bot - Dr. Victor"
-      
-      # Banco de Dados
+      INSTALLATION_NAME: "Bot Medico"
       POSTGRES_HOST: db
       POSTGRES_USERNAME: user
       POSTGRES_PASSWORD: password
-      POSTGRES_DATABASE: chatwoot_production
-      
-      # Redis
+      POSTGRES_DATABASE: medico_db
       REDIS_URL: redis://redis:6379/1
-      
-      # Segurança
-      SECRET_KEY_BASE: "sua_chave_secreta_super_longa_e_aleatoria_aqui_12345678901234567890"
+      SECRET_KEY_BASE: "troque_isso_por_algo_aleatorio_e_longo_123456"
       FORCE_SSL: "false"
-      
-      # Configurações
       ENABLE_ACCOUNT_SIGNUP: "true"
-      
-      # Storage (Opcional - para produção use S3)
       ACTIVE_STORAGE_SERVICE: local
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - chatwoot_storage:/app/storage
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     networks:
       - bot_network
 
-  # --- CHATWOOT SIDEKIQ (Background Jobs) ---
   chatwoot_sidekiq:
     image: chatwoot/chatwoot:latest
     container_name: chatwoot_sidekiq
     restart: always
     environment: *chatwoot_env
     depends_on:
-      - db
-      - redis
       - chatwoot_base
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     networks:
       - bot_network
 
-  # --- CHATWOOT WORKER (Cron Jobs) ---
   chatwoot_worker:
     image: chatwoot/chatwoot:latest
     container_name: chatwoot_worker
     restart: always
     environment: *chatwoot_env
     depends_on:
-      - db
-      - redis
       - chatwoot_base
     command: ["bundle", "exec", "rails", "runner", "bin/cron_for_production"]
     networks:
@@ -185,5 +183,6 @@ networks:
 volumes:
   postgres_data:
   evolution_store:
+  evolution_instances:
   redis_data:
   chatwoot_storage:

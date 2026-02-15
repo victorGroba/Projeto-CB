@@ -1,20 +1,23 @@
 import requests
 import json
 
-# --- CONFIGURAÇÕES ---
-CHATWOOT_TOKEN = 'QifaLugsbW88qBoLmXSPi9YK' 
+# --- PREENCHA AQUI ---
+CHATWOOT_TOKEN = 'COLE_SEU_TOKEN_AQUI'  # <--- O TOKEN DO PASSO 2
+CHATWOOT_ACCOUNT_ID = "1"               # <--- Geralmente é 1
 
-# URL da Evolution API (acessível pelo localhost do servidor)
-EVOLUTION_URL = "http://localhost:8080" 
+# --- NÃO MEXA AQUI (Configurado para sua VPS) ---
+EVOLUTION_URL = "http://localhost:8080"
 INSTANCE_NAME = "BotMedico"
 API_KEY = "Josevfg2409@"
 
-# URL interna do Docker (A Evolution usa essa para falar com o Chatwoot)
-CHATWOOT_DOCKER_URL = "http://78.142.242.82:3001" 
+# Endereço interno que a Evolution vai usar para falar com o Chatwoot
+# (Confirmado pelo seu docker ps: o nome é chatwoot_base)
+CHATWOOT_DOCKER_URL = "http://chatwoot_base:3000"
 
 def configurar_integracao():
-    url = f"{EVOLUTION_URL}/chatwoot/set/{INSTANCE_NAME}"
+    print(f"🔌 Conectando {INSTANCE_NAME} ao Chatwoot...")
     
+    url = f"{EVOLUTION_URL}/chatwoot/set/{INSTANCE_NAME}"
     headers = {
         "apikey": API_KEY,
         "Content-Type": "application/json"
@@ -22,34 +25,29 @@ def configurar_integracao():
     
     payload = {
         "enabled": True,
-        "accountId": "1",            # <--- CORREÇÃO: Tem que ser String ("1")
+        "accountId": CHATWOOT_ACCOUNT_ID,
         "token": CHATWOOT_TOKEN,
-        "url": CHATWOOT_DOCKER_URL,
+        "url": CHATWOOT_DOCKER_URL, 
         "signMsg": True,
         "reopenConversation": True,
-        "conversationPending": False
+        "conversationPending": False,
+        "importContacts": True,
+        "mergeBrazilContacts": True
     }
-    
-    print(f"🔌 Conectando {INSTANCE_NAME} ao Chatwoot...")
     
     try:
         response = requests.post(url, json=payload, headers=headers)
+        print(f"Status: {response.status_code}")
+        print(response.json())
         
-        if response.status_code == 200:
-            data = response.json()
-            # A Evolution retorna { "status": 200, ... } ou { "status": 201, ... } quando dá certo
-            if data.get('status') in [200, 201]:
-                print("\n✅ SUCESSO! Integração configurada.")
-                print("Agora as mensagens do WhatsApp aparecerão no Chatwoot.")
-            else:
-                print("\n⚠️  Atenção: A API respondeu, mas verifique o conteúdo:")
-                print(json.dumps(data, indent=2))
+        if response.status_code in [200, 201]:
+            print("\n✅ SUCESSO! Integração feita.")
+            print("Envie um 'Oi' no WhatsApp do bot e veja se aparece no Chatwoot (porta 3001).")
         else:
-            print(f"\n❌ ERRO: Status {response.status_code}")
-            print(response.text)
+            print("\n❌ Erro na API Evolution.")
             
     except Exception as e:
-        print(f"\n❌ ERRO DE CONEXÃO: {e}")
+        print(f"\n❌ Erro de conexão: {e}")
 
 if __name__ == "__main__":
     configurar_integracao()
