@@ -62,8 +62,8 @@ services:
       
       # Webhook para o Bot
       - WEBHOOK_GLOBAL_URL=http://bot-medico:5000/webhook
-      - WEBHOOK_GLOBAL_ENABLED=true
-      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=true
+      - WEBHOOK_GLOBAL_ENABLED=false
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
       
       # Chatwoot Integration
       - CHATWOOT_ENABLED=true
@@ -74,7 +74,7 @@ services:
       
       # Outras Configurações
       - QRCODE_LIMIT=50
-      - DEL_TEMP_INSTANCES=true
+      - DEL_TEMP_INSTANCES=false
     volumes:
       - evolution_store:/evolution/store
     depends_on:
